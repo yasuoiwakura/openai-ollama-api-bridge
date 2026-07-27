@@ -1,0 +1,19 @@
+services:
+  ollama-bridge:
+    build: .
+    container_name: py-ollama-openai-bridge
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${BRIDGE_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:8080/health').status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -22,18 +22,26 @@ Uses Ollama's native `/api/chat` endpoint directly, where all parameters are res
 
 ## Quick Start
 
-1. Configure `.env`:
-```env
-DEFAULT_NUM_CTX=64000
-DEFAULT_NUM_PREDICT=128000
+### Docker (recommended)
+
+```bash
+git clone <repo>
+cd py-ollama-openai-bridge
+cp .env.example .env
+# edit .env: set OLLAMA_URL to your Ollama host
+docker compose up -d
+# Bridge available at http://localhost:8080/v1
 ```
 
-2. Start:
+### Direct (without Docker)
+
 ```bash
+pip install -r requirements.txt
+# configure .env
 python proxy.py
 ```
 
-3. Point OpenCode at the bridge:
+Point OpenCode at the bridge:
 ```json
 {
   "provider": {
@@ -58,18 +66,37 @@ python proxy.py
 ## All options
 
 ```env
-DEFAULT_NUM_CTX=64000         # Context window (tokens)
-DEFAULT_NUM_PREDICT=128000    # Max output tokens
-DEFAULT_TEMPERATURE=0.7       # Sampling temperature
-DEFAULT_TOP_P=0.9             # Nucleus sampling
-DEFAULT_TOP_K=40              # Top-K sampling
-DEFAULT_MIN_P=0.05            # Minimum probability
-DEFAULT_REPEAT_PENALTY=1.1    # Repeat penalty
-DEFAULT_SEED=42               # Random seed
-DEFAULT_KEEP_ALIVE=30m        # Model stay-in-memory duration
+NUM_CTX=64000         # Context window (tokens)
+NUM_PREDICT=128000    # Max output tokens
+TEMPERATURE=0.7       # Sampling temperature
+TOP_P=0.9             # Nucleus sampling
+TOP_K=40              # Top-K sampling
+MIN_P=0.05            # Minimum probability
+REPEAT_PENALTY=1.1    # Repeat penalty
+SEED=42               # Random seed
+KEEP_ALIVE=30m        # Model stay-in-memory duration
 ```
 
 Only uncommented values in `.env` are injected. Unset = Ollama's default.
+
+## Failover Routing
+
+Zwei Ollama-Instanzen: `OLLAMA_URL` (Haupt) -> `FAILOVER_OLLAMA_URL` (Backup).
+
+```env
+OLLAMA_URL=http://192.168.0.42:11434
+
+FAILOVER_OLLAMA_URL=http://192.168.0.101:11434
+FAILOVER_NUM_CTX=96000
+FAILOVER_NUM_PREDICT=128000
+FAILOVER_KEEP_ALIVE=5m
+```
+
+- Gesundheitscheck via `GET /api/tags` vor jedem Routing
+- Haupt nicht erreichbar -> automatischer Failover zu Backup
+- Auch bei ConnectionError/Timeout während laufendem Chat -> Failover
+- Failover-Target hat eigene Parameter (num_ctx, num_predict, keep_alive)
+- Einfach-Modus: nur `OLLAMA_URL` setzen (abwärtskompatibel)
 
 ## Architecture
 

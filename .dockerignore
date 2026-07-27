@@ -1,0 +1,9 @@
+.env
+__pycache__
+*.pyc
+.git
+.gitignore
+*.md
+testdata
+NOTES.md
+SPEC.md

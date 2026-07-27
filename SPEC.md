@@ -384,6 +384,31 @@ gamemaker1/gemma3:12b-fc[2] → aktiviert PS2_*
 
 ---
 
+## Multithreading
+
+**Priorität: sehr niedrig** – lösbar via Kubernetes/Docker Compose Replicas.
+
+### Problem
+
+Der aktuelle Proxy verwendet `HTTPServer` mit `BaseHTTPRequestHandler`, der Requests
+synchron und single-threaded abarbeitet. Bei mehreren parallelen Requests blockiert
+ein Request den nächsten.
+
+### Lösungsidee
+
+- `ThreadingHTTPServer` (Python 3.7+) oder `ForkingHTTPServer` nutzen
+- Oder `socketserver.ThreadingMixIn` für einfaches Multithreading
+- Oder auf ASGI/uvicorn wechseln (async, aber großer Umbau)
+
+### Warum niedrige Priorität
+
+- Im OpenCode-Kontext kommt selten mehr als 1 Request parallel
+- Docker Compose kann via `--scale ollama-bridge=3` mehrere Instanzen starten
+- K8s/ Nomad lösen das auf Orchestrierungsebene
+- Single-Threaded ist simpler, fehlerresistenter und leichter zu debuggen
+
+---
+
 # Logging
 
 Useful structured logging:
@@ -419,5 +444,11 @@ Version 0.1 should support:
 - configurable `num_ctx`
 - configurable `keep_alive`
 - transparent message forwarding
-
 Once this works with OpenCode, additional OpenAI endpoints may be added later.
+---
+## References
+- `README.md` – Project overview, quick start guide, Docker usage, configuration examples.
+- `SPEC.md` – Detailed technical specification, API mapping, multithreading, logging, parametersets, milestones.
+- `testdata/MAPPING.md` – Full mapping between OpenAI Chat Completions and Ollama Chat APIs, including field conversions and streaming details.
+- `NOTES.md` – Template & notes for configuring opencode.json, parameter explanations, pitfalls, VRAM rule of thumb.
+All these files provide complementary information: the README is user‑facing, SPEC contains formal specs, MAPPING gives implementation reference, and NOTES offers configuration guidance for developers using OpenCode.
