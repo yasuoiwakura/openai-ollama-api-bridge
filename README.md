@@ -428,6 +428,94 @@ This allows changing runtime behaviour without rebuilding model definitions.
 - Preserve streaming responses
 - Preserve tool calls and reasoning metadata where available
 
+## Features plammed
+
+- prevent 2s failover delay by ongoing checking primary server
+  - just cache health check for 60 seconds
+
+---
+
+## Example Setup
+
+My actual usecase is accessing my GPU Cluster from outside. That's why I also implemented the failover function.
+Having an API Gateway AND reverse Proxy mit seem overpowered for this little setup, but I use Authentik with TraefiK/Caddy to access Homelab WebApps and Kong to access Homelab APIs.
+You want only one Tier to handle TLS Connections, so Caddy(Homelab) or Traefik(Rootserver) are always involved.
+
+```mermaid
+
+
+flowchart TD
+
+
+    subgraph Laptop
+        OC["OpenCode Client"]
+    end
+
+    subgraph Homelan["Home LAN"]
+
+        subgraph Router
+            IP["Public IPV4"]
+            Portforwarding["NAT Forward Port 443"]
+        end
+
+        subgraph OptiPlex["Optiplex"]
+            subgraph PVE["Proxmox Cluster"]
+                subgraph LXC["LXC HomeLab Container"]
+                    subgraph Docker["Docker Compose"]
+                        ReverseProxy["Traefik/Caddy<br />Reverse Proxy<br/>TLS Termination"]
+                        Kong["Kong API Gateway<br />JWT Authorization"]
+                        Bridge["API Bridge<br />this project"]
+                    end
+                end
+            end
+        end
+
+        subgraph OldLaptop["Linux Laptop"]
+            subgraph Debian["Debian Linux"]
+                ROCM["Rocm/Vulcan driver"]
+                subgraph Debian_Docker["Docker Compose"]
+                    ollama_docker["Ollama Server"]
+                end
+            end
+        end
+
+        RX["AMD RX 6900XT<br/>16GB VRAM"]
+        subgraph Gaming["Gaming Machine"]
+            subgraph Win11["Windows 11"]
+                CUDA["CUDA driver"]
+                ollama_exe["ollama.exe"]
+            end
+            RTX["Nvidia RTX 5090<br/>32GB VRAM"]
+        end
+
+
+    end
+
+
+    OC -->|Internet| IP
+    IP --> Portforwarding
+    Portforwarding --> ReverseProxy
+    ReverseProxy --> Kong
+    Kong --> Bridge
+
+    
+    Bridge -->|"PRIMARY<br />num_ctx=128K"| ollama_exe
+
+    RTX -.- CUDA
+    CUDA -.- ollama_exe
+
+    RX -.-|"Riser Cable"| ROCM
+    ROCM -.- ollama_docker
+
+    Bridge -.->|"FAILOVER<br />num_ctx=32K"| ollama_docker
+    
+
+    style OptiPlex fill: #88FFFF
+    style OldLaptop fill: #88FFFF
+    style Gaming fill: #88FFFF
+    style Bridge fill:#b5f5b5
+
+```
 ---
 
 ## License
