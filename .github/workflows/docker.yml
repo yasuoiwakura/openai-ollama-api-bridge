@@ -1,35 +1,26 @@
-name: Build and push Docker image
+name: Docker Image
 
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]
   workflow_dispatch:
-
-permissions:
-  contents: read
-  packages: write
 
 jobs:
   docker:
     runs-on: ubuntu-latest
 
+    permissions:
+      packages: write
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Login to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/openai-ollama-api-bridge:latest
-            ghcr.io/${{ github.repository_owner }}/openai-ollama-api-bridge:${{ github.sha }}
+      - name: Build
+        run: docker build -t ghcr.io/${{ github.repository }}:latest .
+
+      - name: Push
+        run: docker push ghcr.io/${{ github.repository }}:latest
+ 
