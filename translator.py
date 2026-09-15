@@ -76,8 +76,15 @@ def _iso_to_unix(iso_str: str) -> int:
 
 # ── Request: 01 → 02 ────────────────────────────────────────────
 
-def translate_request(openai_req: dict, config: dict | None = None) -> dict:
-    """OpenAI /v1/chat/completions Request → Ollama /api/chat Request."""
+def translate_request(openai_req: dict, config: dict | None = None, *,
+                      inject_defaults: bool = True) -> dict:
+    """OpenAI /v1/chat/completions Request → Ollama /api/chat Request.
+
+    inject_defaults=True:  Config-Defaults (.env: num_ctx, num_predict, Sampling) werden injiziert.
+    inject_defaults=False: Nur Parameter, die der OpenAI-Request explizit sendet (max_tokens,
+                           temperature, top_p, penalties, seed, stop). num_ctx/num_predict-
+                           Defaults entfallen → Ollama nutzt die Modelfile-Einstellungen.
+    """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
 
     # Lookup: tool_call_id → function_name (für tool-Callbacks)
@@ -123,18 +130,21 @@ def translate_request(openai_req: dict, config: dict | None = None) -> dict:
         "model": openai_req["model"],
         "messages": messages,
         "stream": openai_req.get("stream", True),
-        "options": {
-            "num_predict": cfg.get("num_predict") or openai_req.get("max_tokens", 32000),
-            "num_ctx": cfg["num_ctx"],
-        },
+        "options": {},
         "keep_alive": cfg["keep_alive"],
     }
 
-    # Config-Defaults aus .env in options (werden von openai_req überschrieben)
-    for key in ("temperature", "top_p", "top_k", "min_p", "repeat_penalty",
-                "frequency_penalty", "presence_penalty", "seed", "repeat_last_n", "stop"):
-        if key in cfg:
-            ollama["options"][key] = cfg[key]
+    if inject_defaults:
+        # Config-Defaults aus .env in options (werden von openai_req überschrieben)
+        ollama["options"]["num_predict"] = cfg.get("num_predict") or openai_req.get("max_tokens", 32000)
+        ollama["options"]["num_ctx"] = cfg["num_ctx"]
+        for key in ("temperature", "top_p", "top_k", "min_p", "repeat_penalty",
+                    "frequency_penalty", "presence_penalty", "seed", "repeat_last_n", "stop"):
+            if key in cfg:
+                ollama["options"][key] = cfg[key]
+    elif "max_tokens" in openai_req:
+        # Ohne Defaults: nur explizit vom Client gewünschte Max-Tokens durchreichen
+        ollama["options"]["num_predict"] = openai_req["max_tokens"]
 
     if "tools" in openai_req and openai_req["tools"]:
         ollama["tools"] = deepcopy(openai_req["tools"])
@@ -319,12 +329,15 @@ def _save_json(path: str, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-def run_fixture(scenario_dir: str, config: dict | None = None):
+def run_fixture(scenario_dir: str, config: dict | None = None,
+                inject_defaults: bool = True):
     """
     Führt die komplette Fixture-Übersetzung für ein Szenario aus:
 
       01_req_completions.json  → translate_request  → 02_req_chat.json
       03_resp_chat.json          → translate_response → 04_resp_completions.json
+
+    inject_defaults=False simuliert "X-Bridge-Override: off" (keine .env-Defaults).
     """
     import os
 
@@ -333,7 +346,7 @@ def run_fixture(scenario_dir: str, config: dict | None = None):
     # ── Request (01 → 02) ────────────────────────────────────────
     if os.path.exists(p("01_req_completions.json")):
         req = _load_json(p("01_req_completions.json"))
-        ollama_req = translate_request(req, config)
+        ollama_req = translate_request(req, config, inject_defaults=inject_defaults)
         _save_json(p("02_req_chat.json"), ollama_req)
         print(f"  Erzeugt: {p('02_req_chat.json')}")
 
@@ -350,7 +363,9 @@ def run_fixture(scenario_dir: str, config: dict | None = None):
 
 
 if __name__ == "__main__":
+    import os
     import sys
     scenario = sys.argv[1] if len(sys.argv) > 1 else "testdata/fixtures/opencode_plan_mode"
-    print(f"Fixture-Mapping: {scenario}")
-    run_fixture(scenario)
+    no_defaults = os.getenv("FIXTURE_NO_DEFAULTS", "").strip().lower() in ("1", "true", "on", "yes")
+    print(f"Fixture-Mapping: {scenario}  (inject_defaults={not no_defaults})")
+    run_fixture(scenario, inject_defaults=not no_defaults)

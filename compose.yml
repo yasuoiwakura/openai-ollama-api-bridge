@@ -1,9 +1,16 @@
 services:
+  # Legacy bridge (existing)
   ollama-bridge:
+    image: ghcr.io/yasuoiwakura/openai-ollama-api-bridge:${IMAGE_TAG:-latest}
     build: .
     container_name: py-ollama-openai-bridge
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Pause zwischen Ende eines Upstream-Requests und Start des nächsten (Sekunden)
+      # Fester Wert via compose, override via .env UPSTREAM_PAUSE
+      - UPSTREAM_PAUSE=${UPSTREAM_PAUSE:-1.5}
+      - UPSTREAM_LOW_TPS=${UPSTREAM_LOW_TPS:-1.0}
     ports:
       - "${BRIDGE_PORT:-8080}:8080"
     healthcheck:
@@ -17,3 +24,71 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # mitmproxy-bridge-6081-6082:
+  #   container_name: py-ollama-mitmproxy-bridge-6081-6082
+  #   hostname: mitmproxy-bridge-6081-6082
+  #   image: mitmproxy/mitmproxy:12.2.3
+  #   restart: unless-stopped
+  #   depends_on:
+  #     ollama-bridge:
+  #       condition: service_healthy
+  #   command:
+  #     - mitmweb
+  #     - --mode
+  #     - reverse:http://ollama-bridge:8080
+  #     - --web-host
+  #     - 0.0.0.0
+  #     - --set
+  #     - web_password=mitm
+  #     - --set
+  #     - web_open_browser=false
+  #   ports:
+  #     - "6081:8080"
+  #     - "6082:8081"
+  #   healthcheck:
+  #     test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 8081), 2); s.close()"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 10s
+  #   logging:
+  #     driver: json-file
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+
+  # mitmproxy-cpi-6083-6084:
+  #   container_name: py-ollama-mitmproxy-cpi-6083-6084
+  #   hostname: mitmproxy-cpi-6083-6084
+  #   image: mitmproxy/mitmproxy:12.2.3
+  #   restart: unless-stopped
+  #   depends_on:
+  #     ollama-bridge:
+  #       condition: service_healthy
+  #   command:
+  #     - mitmweb
+  #     - --mode
+  #     - reverse:https://api.inferenceprovider.tld
+  #     - --web-host
+  #     - 0.0.0.0
+  #     - --set
+  #     - web_password=mitm
+  #     - --set
+  #     - web_open_browser=false
+
+  #   ports:
+  #     - "6083:8080"
+  #     - "6084:8081"
+  #   healthcheck:
+  #     test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 8082), 2); s.close()"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 10s
+  #   logging:
+  #     driver: json-file
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+

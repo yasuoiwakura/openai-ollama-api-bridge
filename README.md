@@ -1,257 +1,32 @@
 # py-ollama-openai-bridge
 
-A lightweight HTTP proxy that translates OpenAI `/v1/chat/completions` requests to Ollama's native `/api/chat` API and back.
-
-## The Problem
-
-Ollama's OpenAI-compatible endpoint (`/v1/chat/completions`) has serious runtime configuration limitations.
-
-Without custom Modelfiles, parameters such as context size cannot be centrally controlled. Requests through the OpenAI compatibility layer may run with Ollama defaults instead of the desired runtime settings.
-
-The typical workaround is creating **custom Modelfiles** for every single model with settings like:
-
-```
-PARAMETER num_ctx 64000
-```
-
-This creates duplicated model definitions:
-
-- `llama3.2` → base model + custom Modelfile
-- `qwen3` → base model + custom Modelfile
-- `gemma3` → base model + custom Modelfile
-- `mistral` → base model + custom Modelfile
-- `deepseek-r1` → base model + custom Modelfile
-
-20 models = 20 additional Modelfiles.
-
-Changing the context size later means rebuilding or updating all of them again.
-
-The problem is not the models themselves — it is the missing central runtime configuration layer.
-
-### Without creating Ollama Modelfiles, the default OpenCode + Ollama setup has serious compatibility limitations
-
-```mermaid
-flowchart LR
-
-    subgraph OpenCode
-        OC_OpenAI["OpenAI Connector"]
-        subgraph JSON["opencode.jsonc"]
-            JMAX["max_tokens<br />=64K"]
-            JMAXLEN["max response length"]
-            J_MODEL["basic model"]
-        end
-
-        subgraph OC_POST["POST"]
-            OC_COMPLETE["/v1/chat/completions"]
-            MODEL["basic model"]
-            MSG["messages"]
-            MAX["max_tokens<br />=32K"]
-            STREAM["stream"]
-        end
-    end
-
-    subgraph Ollama
-
-        CTX_DEFAULT["Default:<br />num_ctx=4K"]
-
-        subgraph OL_OpenAI["OpenAI Compatibility API"]
-            OL_COMPLETE["/v1/chat/completions"]
-            OL_MODEL["basic model"]
-            CMSG["messages"]
-            CMAX["max_tokens<br />=32K"]
-            CSTREAM["stream"]
-        end
-
-        subgraph Native["Native Ollama APIs"]
-            CHAT["POST /api/chat"]
-            GEN["POST /api/generate"]
-        end
-
-        MODELS[(Any Model **without** Modelfile)]
-
-    end
-
-    J_MODEL --> MODEL
-
-    JMAX -.->|"🔒<br />hardcoded<br />32K"| MAX
-    JMAXLEN -.->|"❌<br />ignored"| MAX
-
-    OC_OpenAI -.->|"❌<br />not used"| Native
-    OC_COMPLETE -.->|"🚧limited"| OL_COMPLETE
-
-    OC_OpenAI --> OC_POST
-
-    MODEL --> OL_MODEL
-    MSG --> CMSG
-    MAX --> CMAX
-    STREAM --> CSTREAM
-
-    OL_MODEL --Default Model<br/>num_ctx=4K<br/>without Modelfile--> MODELS
-
-    CMSG --> MODELS
-
-    CMAX -.->|"❌<br />ignored"| CTX_DEFAULT
-
-    CTX_DEFAULT -->|"without custom Modelfile"| MODELS
-
-    CSTREAM --> MODELS
-
-    CHAT --> MODELS
-    GEN --> MODELS
-
-
-    style OC_COMPLETE fill:#ffe7aa
-    style OL_COMPLETE fill:#ffe7aa
-    style CHAT fill:#b5f5b5
-    style GEN fill:#b5f5b5
-    style JMAX fill:#b5f5b5
-    style MAX fill:#ffe7aa
-    style CMAX fill:#ffaaaa
-    style J_MODEL fill:#b5f5b5
-    style OL_MODEL fill:#b5f5b5
-    style MODEL fill:#b5f5b5
-```
-
----
-
-## Why create another custom Modelfile for every model?
-
-The only practical workaround without a bridge is creating a custom Ollama Modelfile for every model just to override runtime parameters.
-
-This is redundant, time-consuming, and difficult to maintain when frequently testing or switching models.
-
-```mermaid
-flowchart TD
-
-    M1["llama3.2<br/>Model"]
-    F11["Base Model<br/>llama3.2"]
-    F12["Modelfile<br/>llama3.2<br/>num_ctx=32K"]
-
-    M2["qwen3<br/>Model"]
-    F21["Base Model<br/>qwen3"]
-    F22["Modelfile<br/>qwen3<br/>num_ctx=32K"]
-
-    M3["gemma3<br/>Model"]
-    F31["Base Model<br/>gemma3"]
-    F32["Modelfile<br/>gemma3<br/>num_ctx=32K"]
-
-    M4["mistral<br/>Model"]
-    F41["Base Model<br/>mistral"]
-    F42["Modelfile<br/>mistral<br/>num_ctx=32K"]
-
-    M5["deepseek-r1<br/>Model"]
-    F51["Base Model<br/>deepseek-r1"]
-    F52["Modelfile<br/>deepseek-r1<br/>num_ctx=32K"]
-
-    M1 --> F11
-    M1 --> F12
-
-    M2 --> F21
-    M2 --> F22
-
-    M3 --> F31
-    M3 --> F32
-
-    M4 --> F41
-    M4 --> F42
-
-    M5 --> F51
-    M5 --> F52
-
-    style M1 fill:#b5f5b5
-    style M2 fill:#b5f5b5
-    style M3 fill:#b5f5b5
-    style M4 fill:#b5f5b5
-    style M5 fill:#b5f5b5
-
-    style F12 fill:#ffe7aa
-    style F22 fill:#ffe7aa
-    style F32 fill:#ffe7aa
-    style F42 fill:#ffe7aa
-    style F52 fill:#ffe7aa
-```
-## What this proxy does
-
-Uses Ollama's native `/api/chat` endpoint directly, where runtime parameters are explicitly supported.
-
-One `.env` file configures all models centrally.
-
-| Problem | Without bridge | With bridge |
-|---|---|---|
-| Context stuck at default | Custom Modelfile per model | `NUM_CTX=64000` in `.env` |
-| Output token limits | Client-side limitations | `NUM_PREDICT=128000` override |
-| Runtime tuning | Modelfile per model | Central `.env` configuration |
-| Tool calls | OpenAI adapter translation issues | Native Ollama format translation |
-| Thinking/reasoning fields | Adapter dependent | Passed through transparently |
-
----
-
-## Central API bridge to enforce runtime settings
-
-Provide a single OpenAI endpoint while centrally enforcing runtime policies and automatically switching to a secondary Ollama server if the primary becomes unavailable.
-
-```mermaid
-flowchart LR
-
-    Client["OpenCode<br/>OpenAI Connector"]
-
-    subgraph Bridge["API Bridge"]
-        TRANS["OpenAI → Ollama<br/>Translation"]
-        CONTEXT["Enforce<br/>Context Size Policy"]
-        FAILOVER["Switch to other Server"]
-    end
-
-    O1["Ollama Server"]
-
-    Client -->|"speaks OpenAI API"| Bridge
-    Bridge -->|"speaks Ollama API"| O1
-
-    style Client fill:#ffaaaa
-    style Bridge fill:#88FFFF
-    style O1 fill:#b5f5b5
-```
-
----
-
-## High Availability / Failover
-
-Provide a single OpenAI endpoint while automatically switching to a secondary Ollama server if the primary becomes unavailable.
-
-```mermaid
-flowchart LR
-
-
-    Client["OpenCode<br/>OpenAI Connector"]
-
-    Bridge["OpenAI ↔ Ollama API Bridge"]
-
-    Decision{"Primary Available?"}
-
-    C1["Context Size = 128K"]
-    C2["Context Size = 32K"]
-
-    O1["Primary Ollama Server"]
-    O2["Secondary Ollama Server"]
-
-    Client --> Bridge
-    Bridge --> Decision
-
-    Decision -->|Yes| C1
-    Decision -->|No| C2
-
-    C1 --> O1
-    C2 --> O2
-
-
-
-    style Bridge fill:#ffff88
-    style O1 fill:#b5f5b5
-    style O2 fill:#b5f5b5
-    style C1 fill:#e8f4fd
-    style C2 fill:#88FFFF
-```
-
----
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)
+![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)
+
+Intelligent Ollama proxy with queue mode, model name parameter injection, and automatic failover for OpenAI-compatible clients.
+
+## Table of Contents
+
+- [Why This Bridge?](#why-this-bridge)
+- [Quick Start](#quick-start)
+- [Two Operating Modes](#two-operating-modes)
+- [Features](#features)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Non-Goals](#non-goals)
+- [Further Documentation](#further-documentation)
+- [License](#license)
+
+## Why This Bridge?
+
+Ollama's OpenAI-compatible endpoint (`/v1/chat/completions`) lacks central runtime configuration. Without custom Modelfiles, parameters like context size cannot be controlled centrally. This bridge solves that problem while adding enterprise features:
+
+- **Queue Mode** - Serialize parallel requests for rate-limited APIs (e.g., cheapestinference.com)
+- **Model Name Injection** - `[key=value]` syntax in model names for client-compatible parameters
+- **Auto-Pull** - Automatically download models on 404 errors
+- **Failover** - Automatic switching between primary/backup Ollama servers
+- **Central Configuration** - One `.env` file configures all models
 
 ## Quick Start
 
@@ -267,13 +42,21 @@ cp .env.example .env
 docker compose up -d
 ```
 
+### Using GHCR Image (without building locally)
+
+```bash
+# Pull the latest image from GHCR
+docker pull ghcr.io/yasuoiwakura/openai-ollama-api-bridge:latest
+
+# Or run directly with docker compose (pulls from GHCR automatically)
+IMAGE_TAG=latest docker compose up -d
+```
+
 Bridge available at:
 
 ```text
 http://localhost:8080/v1
 ```
-
----
 
 ### Direct (without Docker)
 
@@ -284,8 +67,6 @@ pip install -r requirements.txt
 
 python proxy.py
 ```
-
----
 
 Point OpenCode at the bridge:
 
@@ -313,9 +94,120 @@ Point OpenCode at the bridge:
 }
 ```
 
----
+## Two Operating Modes
 
-## All options
+The bridge operates in two distinct modes, each designed for specific use cases:
+
+| Aspect | Translate Mode | Queue Mode |
+|--------|----------------|------------|
+| **Purpose** | OpenAI ↔ Ollama translation | Serialization for rate-limited APIs |
+| **Data Flow** | Client → Bridge (translate) → Ollama → Bridge (translate) → Client | Multiple Clients → Queue → 1 Worker → External API (pass-through) |
+| **Request Handling** | Translated (OpenAI → Ollama) | Pass-through (OpenAI → OpenAI) |
+| **Response Handling** | Translated (Ollama NDJSON → OpenAI SSE) | Pass-through (SSE stream) |
+| **Upstream** | Local Ollama server | External OpenAI-compatible API |
+| **Failover** | ✅ Yes (automatic) | ❌ No (single target) |
+| **Keep-alive** | ❌ No (SSE stream) | ✅ Yes (`: keepalive` comments) |
+| **Key Features** | Tool-Calls, Reasoning, Auto-Pull | Scheduler Modes, SizeTracker, Rate-Limit |
+| **Activation** | Default (no Queue headers) | `X-Bridge-Queue: on` header |
+
+### Translate Mode (Default)
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as Bridge
+    participant O as Ollama
+
+    C->>B: POST /v1/chat/completions<br/>OpenAI Format
+    Note over B: translate_request()<br/>OpenAI → Ollama
+    B->>O: POST /api/chat<br/>(Ollama Format)
+    O-->>B: NDJSON-Stream
+    Note over B: translate_response()<br/>Ollama → OpenAI SSE
+    B-->>C: SSE-Stream<br/>(OpenAI Format)
+```
+
+**Features:**
+- Request Translation: OpenAI `messages` → Ollama `messages` (incl. Tool-Calls, images)
+- Response Translation: Ollama NDJSON → OpenAI SSE Chunks
+- Failover: Automatic switch to backup server on ConnectionError
+- Auto-Pull: Auto-download missing models (on 404)
+- Model Name Parameters: `[key=value;key=value]` in model name
+- Server Override: `[server=1]` or `[server=failover]` for explicit routing
+
+### Queue Mode
+
+```mermaid
+sequenceDiagram
+    participant C1 as Client 1
+    participant C2 as Client 2
+    participant B as Bridge
+    participant Q as Queue
+    participant U as Upstream
+
+    C1->>B: POST /v1/chat/completions<br/>X-Bridge-Queue: on
+    C2->>B: POST /v1/chat/completions<br/>X-Bridge-Queue: on
+    
+    B->>Q: Enqueue Request 1
+    B->>Q: Enqueue Request 2
+    
+    Q->>U: Request 1 (serialized)
+    U-->>Q: Response 1
+    Q-->>B: SSE-Stream 1
+    B-->>C1: SSE-Stream 1
+    
+    Q->>U: Request 2 (serialized)
+    U-->>Q: Response 2
+    Q-->>B: SSE-Stream 2
+    B-->>C2: SSE-Stream 2
+    
+    Note over Q: Keep-Alive comments<br/>prevent timeout
+```
+
+**Features:**
+- Serialization: N parallel requests → 1 upstream request
+- Keep-alive: SSE comments (`: keepalive`) during wait time
+- Scheduler Modes: FIFO, Session-aware, Priority-based
+- Fallback-Timeout: Wait time before 200 OK (default 15s)
+- SizeTracker: Learns from 413 errors, blocks too large requests
+- RateLimitTracker: Blocks on 429 with Retry-After
+- Transparent Errors: Upstream status codes forwarded 1:1
+
+### Mode Selection
+
+```mermaid
+flowchart TD
+    A[Client Request] --> B{X-Bridge-Queue header?}
+    B -->|on/true/1| C[Queue Mode]
+    B -->|off/empty| D{QUEUE_ENABLED in .env?}
+    D -->|true| C
+    D -->|false| E[Translate Mode]
+    
+    C --> F[Forward request 1:1]
+    F --> G[Add to Queue]
+    G --> H[Worker serializes]
+    H --> I[Transparent response]
+    
+    E --> J[translate_request]
+    J --> K[Ollama Format]
+    K --> L[Call Ollama]
+    L --> M[translate_response]
+    M --> N[SSE Format]
+```
+
+## Features
+
+| Feature | Description | Use Case |
+|---------|-------------|----------|
+| **Queue Mode** | Serialize parallel requests | Rate-limited APIs (cheapestinference.com) |
+| **Model Name Injection** | `[key=value]` syntax in model names | Client-compatible parameters without headers |
+| **Auto-Pull** | Auto-download models on 404 | User-friendly model management |
+| **Failover** | Automatic server switching | High availability during server outages |
+| **Central Configuration** | `.env` for all models | No more Modelfiles needed |
+| **OpenAI Compatibility** | Native tool calls & streaming | Seamless integration |
+
+## Configuration
+
+### Basic Configuration
 
 ```env
 NUM_CTX=64000
@@ -331,13 +223,93 @@ SEED=42
 KEEP_ALIVE=30m
 ```
 
-Only uncommented values in `.env` are injected.
+Only uncommented values in `.env` are injected. Unset values use Ollama defaults.
 
-Unset values use Ollama defaults.
+### Queue Mode Configuration
 
----
+When Queue Mode is active (`X-Bridge-Queue: on` or `QUEUE_ENABLED=1`), multiple concurrent requests are serialized to one upstream connection.
 
-## Failover Routing
+| Mode | Description |
+|---|---|
+| `fifo` | **First In, First Out** - Requests are processed in the order they arrive (default) |
+| `session` | **Session-aware** - Prefers requests from the same session (based on `[session-id=...]` parameter) |
+| `prio` | **Priority-based** - Requests with lower priority number are processed first (`[Prio=1]` = highest, `[Prio=999]` = lowest, default=100) |
+
+**Queue Headers:**
+
+| Header | Description | Default |
+|---|---|---|
+| `X-Bridge-Queue` | Enable/disable queue: `on`/`off` | From `.env` `QUEUE_ENABLED` |
+| `X-Bridge-Queue-Mode` | Override queue mode: `fifo`, `session`, `prio` | `QUEUE_MODE_DEFAULT` |
+| `X-Bridge-Target-URL` | Override upstream URL | `QUEUE_TARGET_URL` |
+| `X-Bridge-Target-Key` | Override upstream API key | `QUEUE_TARGET_KEY` |
+| `X-Bridge-Prio` | Override request priority (1-999) | 100 |
+| `X-Bridge-Max-Waittime` | Override max wait time in seconds | `QUEUE_MAX_WAITTIME` |
+| `X-Bridge-Fallback-Timeout` | Wait time before sending 200 OK to queued request | `QUEUE_FALLBACK_TIMEOUT` |
+| `X-Bridge-Size-Tracker` | Enable/disable 413 learning: `on`/`off` | `BRIDGE_SIZE_TRACKER` |
+| `X-Bridge-Translate` | Enable/disable translation: `on`/`off` | always on |
+
+**Queue Configuration:**
+
+```env
+# Pause between upstream requests (prevents 429 with 1-connection limit)
+UPSTREAM_PAUSE=1.5
+
+# Threshold for SLOW detection (TPS); currently only acts as logging threshold
+UPSTREAM_LOW_TPS=1.0
+
+# Queue timeouts / limits
+QUEUE_KEEPALIVE=15
+QUEUE_CONNECT_TIMEOUT=60
+QUEUE_STREAM_TIMEOUT=600
+QUEUE_MAX_SIZE=500
+QUEUE_FALLBACK_TIMEOUT=15
+```
+
+### Model Name Parameter Injection
+
+Parameters can be embedded directly in the model name using `[key=value]` syntax. This allows per-request overrides without changing headers or `.env`.
+
+**Syntax:** `model_name[key1=value1;key2=value2]`
+
+**Supported Parameters:**
+
+| Parameter | Example | Effect |
+|---|---|---|
+| `num_ctx` | `[num_ctx=64000]` | Override context window size |
+| `temperature` | `[temperature=0.7]` | Override sampling temperature |
+| `Prio` | `[Prio=1]` | Queue priority (1=highest, 999=lowest, default=100) |
+| `session-id` | `[session-id=abc123]` | Session tracking for queue mode |
+| `pull` | `[pull=true]` | Auto-pull model if not found (404) |
+| `server` | `[server=failover]` | Force routing to specific server |
+| `translate` | `[translate=off]` | Disable OpenAI→Ollama translation for this request |
+| `queue` | `[queue=on]` | Enable/disable queue for this request |
+| `override` | `[override=off]` | Disable .env parameter injection for this request |
+
+**Examples:**
+
+```bash
+# Force failover server
+model=qwen3.5:9b[server=failover]
+
+# Combine with other parameters
+model=deepseek-v4[num_ctx=32768;server=ollama;Prio=1]
+
+# Numeric alias
+model=qwen3[server=2]
+```
+
+**Server Routing (`server` parameter):**
+
+| Value | Alias | Target |
+|---|---|---|
+| `ollama` | `1` | Primary server (`OLLAMA_URL`) |
+| `failover` | `2` | Secondary server (`FAILOVER_OLLAMA_URL`) |
+
+> **Note:** The `server` parameter is ignored in Queue Mode (`X-Bridge-Queue: on`),
+> where the target is determined by `X-Bridge-Target-URL` or `.env` settings.
+
+### Failover Configuration
 
 Two Ollama instances:
 
@@ -365,59 +337,83 @@ Features:
 - Independent failover parameters
 - Simple mode: only `OLLAMA_URL` required
 
----
+## Architecture
 
-## API Comparison
+### Core Architecture - Queue Mode
 
-| Feature | OpenCode w/ Ollama | API Bridge |
-|---|---|---|
-| OpenAI Chat Completions | ✅ | ✅ |
-| OpenAI Responses API | ⚠️ Limited | ✅ |
-| Native `/api/chat` | ❌ | ✅ |
-| Native `/api/generate` | ❌ | ✅ |
-| Streaming | ✅ | ✅ |
-| Tool Calling | Backend dependent | Preserved |
-| Multiple Ollama Servers | ❌ Manual switch | ✅ |
-| Context Size Policy | ❌ Per-model Modelfiles | ✅ Centralized runtime policy |
-| Automatic Failover | ❌ | ✅ |
-| Routing Policies | ❌ | ✅ |
-| Single Stable Endpoint | ❌ | ✅ |
-
----
-
-## Runtime configuration model
-
-Instead of creating model-specific Modelfiles:
-
-```
-llama3.2 + Modelfile
-qwen3    + Modelfile
-gemma3   + Modelfile
-mistral  + Modelfile
-deepseek + Modelfile
-```
-
-the bridge applies runtime policies centrally:
-
-```
-.env
- |
- +-- NUM_CTX
- +-- NUM_PREDICT
- +-- TEMPERATURE
- +-- TOP_P
- +-- TOP_K
- +-- KEEP_ALIVE
- |
- v
-All Ollama models
+```mermaid
+flowchart LR
+    Client1["Client 1"]
+    Client2["Client 2"]
+    Client3["Client 3"]
+    
+    subgraph Bridge["API Bridge"]
+        direction LR
+        Queue["Request Queue<br/>(fifo/session/prio)"]
+        TRANS["OpenAI → Ollama<br/>Translation"]
+        RATELIMIT["Rate Limit<br/>Compliance"]
+    end
+    
+    Upstream["Single Upstream<br/>(api.inferenceprovider.tld)"]
+    
+    Client1 -->|"OpenAI API"| Queue
+    Client2 -->|"OpenAI API"| Queue
+    Client3 -->|"OpenAI API"| Queue
+    
+    Queue --> TRANS
+    TRANS --> RATELIMIT
+    RATELIMIT -->|"Serialized"| Upstream
+    
+    style Client1 fill:#ffaaaa
+    style Client2 fill:#ffaaaa
+    style Client3 fill:#ffaaaa
+    style Bridge fill:#88FFFF
+    style Upstream fill:#b5f5b5
 ```
 
-This allows changing runtime behaviour without rebuilding model definitions.
+### Failover Architecture
 
----
+```mermaid
+flowchart LR
 
-## Design goals
+    Client["OpenCode<br/>OpenAI Connector"]
+
+    Bridge["OpenAI ↔ Ollama API Bridge"]
+
+    Decision{"Primary Available?"}
+
+    C1["Context Size = 128K"]
+    C2["Context Size = 32K"]
+
+    O1["Primary Ollama Server"]
+    O2["Secondary Ollama Server"]
+
+    Client --> Bridge
+    Bridge --> Decision
+
+    Decision -->|Yes| C1
+    Decision -->|No| C2
+
+    C1 --> O1
+    C2 --> O2
+
+    style Bridge fill:#ffff88
+    style O1 fill:#b5f5b5
+    style O2 fill:#b5f5b5
+    style C1 fill:#e8f4fd
+    style C2 fill:#88FFFF
+```
+
+For detailed architecture diagrams and historical context, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Non-Goals
+
+- **Queue Mode does NOT provide failover** (single target only)
+- **Queue Mode does NOT translate requests** (OpenAI → OpenAI pass-through)
+- **Translate Mode does NOT serialize requests** (one request at a time per client)
+- **Translate Mode does NOT support external APIs** (Ollama servers only)
+
+## Design Goals
 
 - Keep OpenAI-compatible clients unchanged
 - Use Ollama's native API capabilities
@@ -428,95 +424,26 @@ This allows changing runtime behaviour without rebuilding model definitions.
 - Preserve streaming responses
 - Preserve tool calls and reasoning metadata where available
 
-## Features plammed
+## Features Implemented
 
-- prevent 2s failover delay by ongoing checking primary server
-  - just cache health check for 60 seconds
+- Queue Mode with fifo/session/prio modes
+- Health check caching (60s TTL)
+- Auto-pull models on 404
+- Per-request parameter overrides via model name syntax
+- Rate limit tracking (429 "window opens")
+- Size tracker (413 learning)
 
----
+## Features Planned
 
-## Example Setup
+- Queue mode: keepalive (single persistent connection)
 
-My actual usecase is accessing my GPU Cluster from outside. That's why I also implemented the failover function.
-Having an API Gateway AND reverse Proxy mit seem overpowered for this little setup, but I use Authentik with TraefiK/Caddy to access Homelab WebApps and Kong to access Homelab APIs.
-You want only one Tier to handle TLS Connections, so Caddy(Homelab) or Traefik(Rootserver) are always involved.
+## Further Documentation
 
-```mermaid
-
-
-flowchart TD
-
-
-    subgraph Laptop
-        OC["OpenCode Client"]
-    end
-
-    subgraph Homelan["Home LAN"]
-
-        subgraph Router
-            IP["Public IPV4"]
-            Portforwarding["NAT Forward Port 443"]
-        end
-
-        subgraph OptiPlex["Optiplex"]
-            subgraph PVE["Proxmox Cluster"]
-                subgraph LXC["LXC HomeLab Container"]
-                    subgraph Docker["Docker Compose"]
-                        ReverseProxy["Traefik/Caddy<br />Reverse Proxy<br/>TLS Termination"]
-                        Kong["Kong API Gateway<br />JWT Authorization"]
-                        Bridge["API Bridge<br />this project"]
-                    end
-                end
-            end
-        end
-
-        subgraph OldLaptop["Linux Laptop"]
-            subgraph Debian["Debian Linux"]
-                ROCM["Rocm/Vulcan driver"]
-                subgraph Debian_Docker["Docker Compose"]
-                    ollama_docker["Ollama Server"]
-                end
-            end
-        end
-
-        RX["AMD RX 6900XT<br/>16GB VRAM"]
-        subgraph Gaming["Gaming Machine"]
-            subgraph Win11["Windows 11"]
-                CUDA["CUDA driver"]
-                ollama_exe["ollama.exe"]
-            end
-            RTX["Nvidia RTX 5090<br/>32GB VRAM"]
-        end
-
-
-    end
-
-
-    OC -->|Internet| IP
-    IP --> Portforwarding
-    Portforwarding --> ReverseProxy
-    ReverseProxy --> Kong
-    Kong --> Bridge
-
-    
-    Bridge -->|"PRIMARY<br />num_ctx=128K"| ollama_exe
-
-    RTX -.- CUDA
-    CUDA -.- ollama_exe
-
-    RX -.-|"Riser Cable"| ROCM
-    ROCM -.- ollama_docker
-
-    Bridge -.->|"FAILOVER<br />num_ctx=32K"| ollama_docker
-    
-
-    style OptiPlex fill: #88FFFF
-    style OldLaptop fill: #88FFFF
-    style Gaming fill: #88FFFF
-    style Bridge fill:#b5f5b5
-
-```
----
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Architecture diagrams and historical context
+- [NOTES.md](NOTES.md) - OpenCode integration and pitfalls
+- [doc/features/](doc/features/) - Detailed feature documentation
+- [CHANGELOG.md](CHANGELOG.md) - Change history
+- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) - Technical details
 
 ## License
 
