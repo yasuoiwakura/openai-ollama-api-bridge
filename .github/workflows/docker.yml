@@ -24,7 +24,8 @@ jobs:
           if [ "${{ github.ref_name }}" = "main" ]; then
             echo "tag=latest" >> $GITHUB_OUTPUT
           else
-            echo "tag=${{ github.ref_name }}-latest" >> $GITHUB_OUTPUT
+            # echo "tag=${{ github.ref_name }}-latest" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Build
