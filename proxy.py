@@ -548,8 +548,6 @@ HOST = os.getenv("BRIDGE_HOST", "0.0.0.0")
 PORT = int(os.getenv("BRIDGE_PORT", "8080"))
 
 _all_targets = _parse_targets()
-if not _all_targets:
-    sys.exit("FEHLER: Kein Ollama-Target konfiguriert. Setze OLLAMA_URL oder FAILOVER_OLLAMA_URL in .env.")
 
 BRIDGE_CONFIG = {
     "num_ctx": int(os.getenv("NUM_CTX", "32768")),
@@ -1253,7 +1251,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
         while True:
             target = self._select_target(failed)
             if target is None:
-                self._send_error(502, "Kein Ollama verfuegbar")
+                if not _all_targets:
+                    self._send_error(400, "No Ollama target configured. Set OLLAMA_URL or FAILOVER_OLLAMA_URL in .env.")
+                else:
+                    self._send_error(502, "No Ollama available")
                 return
 
             self._current_target = target
@@ -1476,7 +1477,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
             while True:
                 target = self._select_target(failed_urls)
                 if target is None:
-                    self._send_error(502, "Kein Ollama verfuegbar")
+                    if not _all_targets:
+                        self._send_error(400, "No Ollama target configured. Set OLLAMA_URL or FAILOVER_OLLAMA_URL in .env.")
+                    else:
+                        self._send_error(502, "No Ollama available")
                     return
 
                 success, error, resp = _send_request_to_target(target)
@@ -1972,6 +1976,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
 def main():
     print(f"py-ollama-openai-bridge laeuft auf http://{HOST}:{PORT}", flush=True)
     print("Targets:", flush=True)
+    if not _all_targets:
+        print("  WARNING: No targets configured! Set OLLAMA_URL or FAILOVER_OLLAMA_URL in .env.", flush=True)
+        print("  Translate mode will respond with HTTP 400. Queue mode requires X-Bridge-Target-URL.", flush=True)
     for t in _all_targets:
         cfg = _build_effective_config(BRIDGE_CONFIG, t)
         ctx = cfg.get("num_ctx", "?")
