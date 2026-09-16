@@ -2,7 +2,7 @@ name: Docker Image
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "dev", "test"]  # Anpassen nach Bedarf
   workflow_dispatch:
 
 jobs:
@@ -18,9 +18,17 @@ jobs:
       - name: Login to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
+      - name: Set image tag
+        id: tag
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}-latest" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build
-        run: docker build -t ghcr.io/${{ github.repository }}:latest .
+        run: docker build -t ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }} .
 
       - name: Push
-        run: docker push ghcr.io/${{ github.repository }}:latest
- 
+        run: docker push ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}
