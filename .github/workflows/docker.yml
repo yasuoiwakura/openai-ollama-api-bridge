@@ -2,7 +2,9 @@ name: Docker Image
 
 on:
   push:
-    branches: ["main", "dev", "test"]  # Anpassen nach Bedarf
+    branches: ["main", "dev", "test"]
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -10,26 +12,77 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
+      contents: read
       packages: write
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Login to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Set image tag
-        id: tag
+      - name: Set image tags
+        id: tags
+        shell: bash
         run: |
-          if [ "${{ github.ref_name }}" = "main" ]; then
-            echo "tag=latest" >> $GITHUB_OUTPUT
+          IMAGE="ghcr.io/${{ github.repository }}"
+          SHA="${GITHUB_SHA::7}"
+
+          TAGS=()
+
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # Release-Tag, z.B. v1.2.3
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
+
+            TAGS+=("$IMAGE:$RELEASE_TAG")
+            TAGS+=("$IMAGE:$SHA")
+
+            # Branch ermitteln, auf dem der Commit liegt
+            BRANCH=$(git for-each-ref \
+              --format='%(refname:short)' \
+              --contains "$GITHUB_SHA" \
+              refs/remotes/origin/{main,dev,test} |
+              head -n 1 |
+              sed 's#origin/##')
+
+            if [ -n "$BRANCH" ]; then
+              TAGS+=("$IMAGE:${BRANCH}-${SHA}")
+            fi
+
           else
-            # echo "tag=${{ github.ref_name }}-latest" >> $GITHUB_OUTPUT
-            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            BRANCH="${{ github.ref_name }}"
+
+            # Beweglicher Branch-Tag
+            if [ "$BRANCH" = "main" ]; then
+              TAGS+=("$IMAGE:latest")
+            else
+              TAGS+=("$IMAGE:$BRANCH")
+            fi
+
+            # Permanente Tags
+            TAGS+=("$IMAGE:$SHA")
+            TAGS+=("$IMAGE:${BRANCH}-${SHA}")
           fi
 
+          printf '%s\n' "${TAGS[@]}" > tags.txt
+
+          echo "Tags:"
+          cat tags.txt
+
       - name: Build
-        run: docker build -t ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }} .
+        run: |
+          TAG_ARGS=""
+
+          while read -r TAG; do
+            TAG_ARGS="$TAG_ARGS -t $TAG"
+          done < tags.txt
+
+          docker build $TAG_ARGS .
 
       - name: Push
-        run: docker push ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}
+        run: |
+          while read -r TAG; do
+            docker push "$TAG"
+          done < tags.txt
