@@ -545,7 +545,18 @@ def _build_effective_config(base: dict, target: Target) -> dict:
 # ── Konfiguration aus .env ─────────────────────────────────────
 
 HOST = os.getenv("BRIDGE_HOST", "0.0.0.0")
-PORT = int(os.getenv("BRIDGE_PORT", "8080"))
+
+try:
+    PORT = int(os.getenv("LISTEN_PORT", os.getenv("BRIDGE_PORT", "8080")))
+    if os.getenv("BRIDGE_PORT") is not None:
+        _log("WARNING: 'BRIDGE_PORT' is deprecated! Rename to 'LISTEN_PORT' in your .env file!")
+except ValueError:
+    PORT = 8080
+    _log(f"KUBERNETES CONFLICT: 'BRIDGE_PORT' contains non-integer value: {os.getenv('BRIDGE_PORT', '(not set)')}")
+    _log(f"PORT set to default: {PORT}. Use 'LISTEN_PORT' instead of 'BRIDGE_PORT'!")
+    _log("Tip: Set 'enableServiceLinks: false' in your Kubernetes Pod spec, or rename your Service.")
+
+
 
 _all_targets = _parse_targets()
 

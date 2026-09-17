@@ -225,6 +225,22 @@ KEEP_ALIVE=30m
 
 Only uncommented values in `.env` are injected. Unset values use Ollama defaults.
 
+### Kubernetes Deployment (Important)
+
+When deploying to Kubernetes, the `BRIDGE_PORT` environment variable can conflict with Kubernetes system-injected variables. Kubernetes injects `BRIDGE_PORT=tcp://<cluster-ip>:<port>` for Services, which causes a `ValueError` when the application tries to parse it as an integer.
+
+**Solution:** Use `LISTEN_PORT` instead of `BRIDGE_PORT`:
+
+```bash
+# Old (conflicts with Kubernetes)
+BRIDGE_PORT=8080
+
+# New (Kubernetes-safe)
+LISTEN_PORT=8080
+```
+
+The application checks `LISTEN_PORT` first, then falls back to `BRIDGE_PORT` for backward compatibility.
+
 ### Queue Mode Configuration
 
 When Queue Mode is active (`X-Bridge-Queue: on` or `QUEUE_ENABLED=1`), multiple concurrent requests are serialized to one upstream connection.
