@@ -28,18 +28,24 @@ jobs:
         shell: bash
         run: |
           IMAGE="ghcr.io/${{ github.repository }}"
+          SHORT_NAME="${{ vars.DOCKER_SHORT_NAME }}"
           SHA="${GITHUB_SHA::7}"
 
           TAGS=()
 
+          add_tags() {
+            local prefix=$1
+            TAGS+=("$prefix:$2")
+            if [ -n "$3" ]; then
+              TAGS+=("$prefix:$3")
+            fi
+            if [ -n "$4" ]; then
+              TAGS+=("$prefix:$4")
+            fi
+          }
+
           if [ "${{ github.event_name }}" = "release" ]; then
-            # Release-Tag, z.B. v1.2.3
             RELEASE_TAG="${{ github.event.release.tag_name }}"
-
-            TAGS+=("$IMAGE:$RELEASE_TAG")
-            TAGS+=("$IMAGE:$SHA")
-
-            # Branch ermitteln, auf dem der Commit liegt
             BRANCH=$(git for-each-ref \
               --format='%(refname:short)' \
               --contains "$GITHUB_SHA" \
@@ -47,23 +53,31 @@ jobs:
               head -n 1 |
               sed 's#origin/##')
 
+            BRANCH_TAG=""
             if [ -n "$BRANCH" ]; then
-              TAGS+=("$IMAGE:${BRANCH}-${SHA}")
+              BRANCH_TAG="${BRANCH}-${SHA}"
+            fi
+
+            add_tags "$IMAGE" "$RELEASE_TAG" "$SHA" "$BRANCH_TAG"
+            if [ -n "$SHORT_NAME" ]; then
+              SHORT_IMAGE="ghcr.io/${{ github.actor }}/${SHORT_NAME}"
+              add_tags "$SHORT_IMAGE" "$RELEASE_TAG" "$SHA" "$BRANCH_TAG"
             fi
 
           else
             BRANCH="${{ github.ref_name }}"
 
-            # Beweglicher Branch-Tag
             if [ "$BRANCH" = "main" ]; then
-              TAGS+=("$IMAGE:latest")
+              MOVING_TAG="latest"
             else
-              TAGS+=("$IMAGE:$BRANCH")
+              MOVING_TAG="$BRANCH"
             fi
 
-            # Permanente Tags
-            TAGS+=("$IMAGE:$SHA")
-            TAGS+=("$IMAGE:${BRANCH}-${SHA}")
+            add_tags "$IMAGE" "$MOVING_TAG" "$SHA" "${BRANCH}-${SHA}"
+            if [ -n "$SHORT_NAME" ]; then
+              SHORT_IMAGE="ghcr.io/${{ github.actor }}/${SHORT_NAME}"
+              add_tags "$SHORT_IMAGE" "$MOVING_TAG" "$SHA" "${BRANCH}-${SHA}"
+            fi
           fi
 
           printf '%s\n' "${TAGS[@]}" > tags.txt
